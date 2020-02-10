@@ -1,0 +1,313 @@
+---
+title: "Stats2 Project1"
+author: "Andrew Leppla"
+date: "2/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import and Inspect Beer Reviews Data
+```{r import and inspect}
+beer_reviews = read.csv('~/R/Stats2/beer_reviews.csv')
+#head(beer_reviews)
+#str(beer_reviews)
+
+```
+
+## Recode review_time variable for Time Series
+
+Per the website summary, "This dataset consists of beer reviews from Beeradvocate. The data span a period of more than 10 years, including all ~1.5 million reviews up to November 2011." https://data.world/socialmediadata/beeradvocate
+
+Assuming the review_time is in seconds, the reviews actually span over 15 years.  A likely date for t=0 is Jan 1, 1970 which puts the last review at Jan 11, 2012 rather than November 2011.  In the absence of any other information, this is close enough to do time series analysis.  
+
+The data are not equally spaced over time which is not surprising.  People aren't reviewing beers every second of every day in a predominantly U.S.-based market.   
+
+To address the unequal data spacing over time, reviews were averaged by Month as well as by Week. 
+
+```{r recode review_time}
+
+#Investigate review_time for recoding
+max_time = max(beer_reviews$review_time) #November 2011?
+min_time = min(beer_reviews$review_time) 
+diff = (max_time- min_time)/60/60/24/365.25 #Over 10 years?
+diff #Actually over 15 years
+
+#Recode review_time with the common origin time Jan 1, 1970
+beer_reviews$review_date_time = as.POSIXct.numeric(beer_reviews$review_time,origin='1970-01-01 00:00:00',tz='EST')
+head(beer_reviews$review_date_time)
+max(beer_reviews$review_date_time) #Jan 11, 2012
+min(beer_reviews$review_date_time) #Aug 21, 1996
+
+#Average by month (and by week) for equally spaced data over time
+beer_reviews$time_vectors = as.POSIXlt.numeric(beer_reviews$review_time,origin='1970-01-01 00:00:00',tz='EST') #Splits the time "YYYY-MM-DD HH:MM:SS" into vectors "YYYY","MM","DD",etc.
+beer_reviews$Year = as.numeric(beer_reviews$time_vectors$year) + 1900 #Calling $year from class POSIXlt resets the origin to year 1900 (see ?POSIXlt)
+beer_reviews$Mon = as.numeric(beer_reviews$time_vectors$mon) + 1 # $mon from POSIXlt is from 0-11, add 1 so it's from 1-12
+beer_reviews$Week = as.integer((beer_reviews$time_vectors$yday + 1)/7 +1) #Divide days (1-366, 366=leap day) by 7 and round down to nearest integer for weeks 1-53 (not perfect, close enough)
+
+```
+
+## Monthly Time Series - 90 Minute IPA
+
+Dogfish Head's "90 Minute IPA" has the most reviews of any beer in the data set.  This was used for Time Series Analysis.  
+
+The data look fairly stationary, but there is a possible upward trend for the last 20 months.     
+
+The monthly data are highly variable for the first 5-10 months. This is because the reviews are too few (n= 1-7) to get a reliable average.  
+
+```{r Monthly Time Series - 90 Min IPA}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(tseries)
+library(forecast)
+
+#Need to recode the time variable back to seconds to pipe it through group_by() and summarize()
+beer_reviews$time_vectors = as.POSIXct.numeric(beer_reviews$review_time,origin='1970-01-01 00:00:00',tz='EST') 
+
+#Filter for 90 Minute IPA Average Monthly Reviews
+tseries_90minIPA_Mon = beer_reviews %>% filter(beer_name=='90 Minute IPA') %>% group_by(Year, Mon) %>% summarize(Overall=mean(review_overall),Count=n()) #class=tibble
+tseries_90min_Mon_df=data.frame(tseries_90minIPA_Mon) #convert tibble to data frame
+
+#Plot the data before modeling
+tseries_90min_Mon_df$Index=1:nrow(tseries_90min_Mon_df)
+tseries_90min_Mon_df %>% ggplot(aes(x=Index,y=Overall)) + geom_line() + ylab("Mean Overall Rating")
+
+#ACF and PACF Plots
+par(mfrow=c(1,2))
+Acf(tseries_90min_Mon_df$Overall,lag.max=25) #Up to lag 19 looks significant
+Pacf(tseries_90min_Mon_df$Overall,lag.max=25) #Up to lag 19 looks significant
+```
+
+## Auto ARIMA Model Selection
+
+Based on the AIC selection criteria, the AR(4)MA(2) model is the best fit that keeps the residuals at or below the significance threshold.
+
+However, there is some evidence of non-stationary data in the model residuals.  The residual plots of ACF and PACF don't decay until after lag 50 and 60, respectively.  
+-Did IPAs become more popular/trendy around this time?
+-Was there a surge of reviews?  
+-Was there a change in the product's publicity or a new marketing campaign?  
+
+```{r}
+par(mfrow=c(1,1))
+
+#Auto ARIMA fits an AR(2)MA(2) model
+#but misses the significant PACF residual at lag 19 
+ARIMA.fit<-auto.arima(tseries_90min_Mon_df$Overall)
+ARIMA.fit #AR(2)MA(2) model, AIC=-83.3
+plot(forecast(ARIMA.fit,h=10))
+points(1:length(tseries_90min_Mon_df$Overall),fitted(ARIMA.fit),type="l",col="blue")
+
+#Lag 19 residual in PACF
+tsdisplay(residuals(ARIMA.fit),lag.max=20,main="AR(2)MA(2) Resid. Diagnostics")
+
+#Residuals decay after lag 50-60.
+#Some evidence of non-stationary behavior between the first and second halves of the data?
+tsdisplay(residuals(ARIMA.fit),lag.max=120,main="AR(2)MA(2) Resid. Diagnostics")
+
+
+#Increase the allowable max order and remove stepwise selection criteria to get higher order models
+ARIMA.fit1<-auto.arima(tseries_90min_Mon_df$Overall,max.order=20,stepwise=F,ic=c('aic'))
+ARIMA.fit1 #AR(4)MA(2) model, AIC=-86.5, BIC=-64.2
+plot(forecast(ARIMA.fit1,h=30))
+points(1:length(tseries_90min_Mon_df$Overall),fitted(ARIMA.fit1),type="l",col="blue")
+
+#Lag 15 and 19 are now just under/at the significance threshold in ACF & PACF
+tsdisplay(residuals(ARIMA.fit1),lag.max=20,main="AR(4)MA(2) Resid. Diagnostics")
+
+#Residuals still decay after lag 50-60.
+tsdisplay(residuals(ARIMA.fit1),lag.max=120,main="AR(4)MA(2) Resid. Diagnostics")
+
+
+#Try BIC for non-stepwise selection criteria
+ARIMA.fit1b<-auto.arima(tseries_90min_Mon_df$Overall,max.order=20,stepwise=F,ic=c('bic'))
+ARIMA.fit1b #AR(2) model, AIC=-84.6, BIC=-73.5
+plot(forecast(ARIMA.fit1b,h=20))
+points(1:length(tseries_90min_Mon_df$Overall),fitted(ARIMA.fit1b),type="l",col="blue")
+
+#Lag 19 is significant in Residual PACF
+tsdisplay(residuals(ARIMA.fit1b),lag.max=20,main="AR(2) Resid. Diagnostics")
+```
+
+## Try to manually tune the model 
+
+Improved the residual lag plots somewhat at the expense of AIC.
+
+ARIMA.fit3 and ARIMA.fit4 appear to be the best manual models.
+
+```{r}
+#Manually try to improve the model & residual decay 
+
+ARIMA.fit2=arima(tseries_90min_Mon_df$Overall, order=c(17,0,2))
+ARIMA.fit2 #AIC = -77.0
+plot(forecast(ARIMA.fit2,h=12))
+points(1:length(tseries_90min_Mon_df$Overall),fitted(ARIMA.fit2),type="l",col="blue")
+tsdisplay(residuals(ARIMA.fit2),lag.max=120,main="ARMA Resid. Diagnostics")
+
+ARIMA.fit3=arima(tseries_90min_Mon_df$Overall, order=c(0,0,17))
+ARIMA.fit3 #AIC = -82.0
+plot(forecast(ARIMA.fit3,h=12))
+points(1:length(tseries_90min_Mon_df$Overall),fitted(ARIMA.fit3),type="l",col="blue")
+tsdisplay(residuals(ARIMA.fit3),lag.max=120,main="MA(20) Resid. Diagnostics")
+
+ARIMA.fit4=arima(tseries_90min_Mon_df$Overall, order=c(2,0,15))
+ARIMA.fit4 #AIC=-84.6 
+par(mfrow=c(1,1))
+plot(forecast(ARIMA.fit4,h=12))
+points(1:length(tseries_90min_Mon_df$Overall),fitted(ARIMA.fit4),type="l",col="blue")
+tsdisplay(residuals(ARIMA.fit4),lag.max=120,main="AR(2)MA(15) Resid. Diagnostics")
+
+ARIMA.fit5=arima(tseries_90min_Mon_df$Overall, order=c(4,0,11))
+ARIMA.fit5 #AIC=-85.1, lag 7 is close to the sig. line
+plot(forecast(ARIMA.fit5,h=30))
+points(1:length(tseries_90min_Mon_df$Overall),fitted(ARIMA.fit5),type="l",col="blue")
+tsdisplay(residuals(ARIMA.fit5),lag.max=120,main=" Resid. Diagnostics")
+
+```
+
+
+## Model non-stationary behavior ?
+
+This didn't add any value to the model.
+
+```{r}
+OLS_Mon<-arima(tseries_90min_Mon_df$Overall,order=c(0,0,0),xreg=beer_tseries_df$Mon)
+tsdisplay(residuals(OLS_Year),lag.max=25,main="Resid. Diagnostics of OLS")
+
+ARIMA_Mon=auto.arima(tseries_90min_Mon_df$Overall, xreg=beer_tseries_df$Mon)
+ARIMA_Mon
+tsdisplay(residuals(ARIMA_Mon),lag.max=35,main="Year + AR(2)MA(2) Resid. Diagnostics") #Still have same model & issue, lag 19 residuals
+```
+
+## Monthly Time Series - Filter out the first 5-10 months with small sample sizes
+
+Visually, the fits don't look that much better than the unfiltered data.  The AICs are lower vs. the unfiltered data likely because variation was filtered out.  
+
+The manual model MA(13) had the lowest AIC.  
+
+```{r Time Series Analysis - 90 Min IPA}
+#Plot that filters out the first 5-10 months (insufficient sample sizes)
+tseries_90min_Mon_df %>% filter(Index>7) %>% ggplot(aes(x=Index,y=Overall)) + geom_line() + ylab("Mean Overall Rating") 
+
+IPA90min_Mon_filtered = tseries_90min_Mon_df %>% filter(Index>7) 
+
+par(mfrow=c(1,2))
+Acf(IPA90min_Mon_filtered$Overall,lag.max=35) #Still has a longer lag = 13 
+Pacf(IPA90min_Mon_filtered$Overall,lag.max=35)#Still has a longer lag = 13 
+
+par(mfrow=c(1,1))
+
+#Auto ARIMA
+
+ARIMA.1<-auto.arima(IPA90min_Mon_filtered$Overall)
+ARIMA.1 #MA(1), missing lag 13, AIC = -130.2
+plot(forecast(ARIMA.1,h=10))
+points(1:length(IPA90min_Mon_filtered$Overall),fitted(ARIMA.1),type="l",col="blue")
+tsdisplay(residuals(ARIMA.1),lag.max=20,main="MA(1) Resid. Diagnostics")
+
+ARIMA.2<-auto.arima(IPA90min_Mon_filtered$Overall,stepwise=F)
+ARIMA.2 #AR(2), missing lag 13, AIC = -130.8
+plot(forecast(ARIMA.2,h=10))
+points(1:length(IPA90min_Mon_filtered$Overall),fitted(ARIMA.2),type="l",col="blue")
+tsdisplay(residuals(ARIMA.2),lag.max=20,main="AR(2) Resid. Diagnostics")
+
+#Manual ARIMA
+
+MA_13 = arima(IPA90min_Mon_filtered$Overall, order=c(0,0,13))
+MA_13 #AIC = -134.6
+plot(forecast(MA_13,h=20))
+points(1:length(IPA90min_Mon_filtered$Overall),fitted(MA_13),type="l",col="blue")
+tsdisplay(residuals(MA_13),lag.max=110,main="MA(13) Resid. Diagnostics")
+
+AR_13 = arima(IPA90min_Mon_filtered$Overall, order=c(13,0,0))
+AR_13 #AIC = -131.9
+plot(forecast(AR_13,h=20))
+points(1:length(IPA90min_Mon_filtered$Overall),fitted(AR_13),type="l",col="blue")
+tsdisplay(residuals(AR_13),lag.max=110,main="AR(13) Resid. Diagnostics")
+
+```
+
+## 90 Minute IPA by Week
+
+
+
+```{r}
+tseries_90minIPA_Wk = beer_reviews %>% filter(beer_name=='90 Minute IPA') %>% group_by(Year, Week) %>% summarize(Overall=mean(review_overall),Count=n())
+tseries_90min_Wk_df=data.frame(tseries_90minIPA_Wk)
+
+tseries_90min_Wk_df$Index=1:nrow(tseries_90min_Wk_df)
+tseries_90min_Wk_df %>% ggplot(aes(x=Index,y=Overall)) + geom_line() + ylab("Mean Overall Rating")
+
+par(mfrow=c(1,2))
+Acf(tseries_90min_Wk_df$Overall,lag.max=120) 
+Pacf(tseries_90min_Wk_df$Overall,lag.max=120) 
+
+par(mfrow=c(1,1))
+
+
+ARIMA.Wk<-auto.arima(tseries_90min_Wk_df$Overall)
+ARIMA.Wk
+plot(forecast(ARIMA.Wk,h=10))
+points(1:length(tseries_90min_Wk_df$Overall),fitted(ARIMA.Wk),type="l",col="blue")
+
+#Residual lag 23 is significant
+tsdisplay(residuals(ARIMA.Wk),lag.max=30,main="ARIMA(4,1,1) Resid. Diagnostics")
+
+#Lots of hits for lag < 1000, decays eventually
+tsdisplay(residuals(ARIMA.Wk),lag.max=2000,main="ARIMA(4,1,1) Resid. Diagnostics")
+
+
+#Turn off stepwise selection for more model terms
+ARIMA.Wk1<-auto.arima(tseries_90min_Wk_df$Overall,stepwise=F)
+ARIMA.Wk1
+plot(forecast(ARIMA.Wk1,h=10))
+points(1:length(tseries_90min_Wk_df$Overall),fitted(ARIMA.Wk1),type="l",col="blue")
+
+#Residual lag 23 is still significant
+tsdisplay(residuals(ARIMA.Wk1),lag.max=30,main="ARIMA(4,1,1) Resid. Diagnostics")
+
+tsdisplay(residuals(ARIMA.Wk1),lag.max=2000,main="ARIMA(4,1,1) Resid. Diagnostics")
+
+```
+
+## Bud Light Time Series
+
+Data may not be stationary; it has some curvature.  The (0,1,1) ARIMA models fits this pretty well.
+
+```{r 2011 Time Series Analysis - Bud Light}
+library(tseries)
+library(forecast)
+
+beer_reviews$time_vectors = as.POSIXlt.numeric(beer_reviews$review_time,origin='1970-01-01 00:00:00',tz='EST')
+beer_reviews$Year = as.numeric(beer_reviews$time_vectors$year) + 1900
+beer_reviews$Mon = as.numeric(beer_reviews$time_vectors$mon) + 1
+beer_reviews$Week = as.numeric(beer_reviews$time_vectors$yday)/7
+beer_reviews$time_vectors = as.POSIXct.numeric(beer_reviews$review_time,origin='1970-01-01 00:00:00',tz='EST')
+
+tseries_BL = beer_reviews %>% filter(beer_name=='Bud Light') %>% group_by(Year, Mon) %>% summarize(Overall=mean(review_overall))
+tseries_BL_df=data.frame(tseries_BL)
+
+#Plot before modeling
+tseries_BL_df$Index=1:nrow(tseries_BL_df)
+tseries_BL_df %>% ggplot(aes(x=Index,y=Overall)) + geom_line() + ylab("Mean Overall Rating")
+
+par(mfrow=c(1,2))
+Acf(tseries_BL_df$Overall,lag.max=120) #Decays after
+Pacf(tseries_BL_df$Overall,lag.max=120) 
+
+par(mfrow=c(1,1))
+
+ARIMA.BL<-auto.arima(tseries_BL_df$Overall)
+ARIMA.BL
+plot(forecast(ARIMA.BL,h=1))
+points(1:length(tseries_BL_df$Overall),fitted(ARIMA.BL),type="l",col="blue")
+
+#Significant ACF residual at lag 22
+tsdisplay(residuals(ARIMA.BL),lag.max=25,main="I(1)MA(1) Resid. Diagnostics") #AR(22) residual
+
+#Takes a long time to decay, non-stationary red flag
+tsdisplay(residuals(ARIMA.BL),lag.max=120,main="I(1)MA(1) Resid. Diagnostics") #AR(22) residual
+
+```
