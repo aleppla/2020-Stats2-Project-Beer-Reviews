@@ -173,10 +173,10 @@ tsdisplay(residuals(ARIMA.fit5),lag.max=120,main=" Resid. Diagnostics")
 This didn't add any value to the model.
 
 ```{r}
-OLS_Mon<-arima(tseries_90min_Mon_df$Overall,order=c(0,0,0),xreg=beer_tseries_df$Mon)
-tsdisplay(residuals(OLS_Year),lag.max=25,main="Resid. Diagnostics of OLS")
+OLS_Mon<-arima(tseries_90min_Mon_df$Overall,order=c(0,0,0),xreg=tseries_90min_Mon_df$Mon)
+tsdisplay(residuals(OLS_Mon),lag.max=25,main="Resid. Diagnostics of OLS")
 
-ARIMA_Mon=auto.arima(tseries_90min_Mon_df$Overall, xreg=beer_tseries_df$Mon)
+ARIMA_Mon=auto.arima(tseries_90min_Mon_df$Overall, xreg=tseries_90min_Mon_df$Mon)
 ARIMA_Mon
 tsdisplay(residuals(ARIMA_Mon),lag.max=35,main="Year + AR(2)MA(2) Resid. Diagnostics") #Still have same model & issue, lag 19 residuals
 ```
