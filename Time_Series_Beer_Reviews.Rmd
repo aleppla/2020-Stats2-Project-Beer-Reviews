@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Import and Inspect Beer Reviews Data
 ```{r import and inspect}
-beer_reviews = read.csv('~/R/Stats2/beer_reviews.csv')
+beer_reviews = read.csv('~/MDS-6XXX-Stats2/2020-Stats2-Project-Beer-Reviews/beer_reviews.csv')
 #head(beer_reviews)
 #str(beer_reviews)
 
@@ -28,6 +28,10 @@ The data are not equally spaced over time which is not surprising.  People aren'
 To address the unequal data spacing over time, reviews were averaged by Month as well as by Week. 
 
 ```{r recode review_time}
+
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
 
 #Investigate review_time for recoding
 max_time = max(beer_reviews$review_time) #November 2011?
@@ -64,9 +68,6 @@ The data look fairly stationary, but there is a possible upward trend for the la
 The monthly data are highly variable for the first 5-10 months. This is because the reviews are too few (n= 1-7) to get a reliable average.  
 
 ```{r Monthly Time Series - 90 Min IPA}
-library(dplyr)
-library(tidyverse)
-library(ggplot2)
 library(tseries)
 library(forecast)
 
@@ -80,12 +81,14 @@ tseries_90min_Mon_df=data.frame(tseries_90minIPA_Mon) #convert tibble to data fr
 #Plot the data before modeling
 ##Data has nonconstant variance for months 1-7 with low n
 tseries_90min_Mon_df$Index=1:nrow(tseries_90min_Mon_df)
-tseries_90min_Mon_df %>% ggplot(aes(x=Index,y=Overall)) + geom_line() +geom_point() + ylab("Mean Overall Rating") + xlab("Months from Dec. 2001")
+tseries_90min_Mon_df %>% ggplot(aes(x=Index,y=Overall)) + geom_line() + geom_point() + ylab("Mean Overall Rating") + xlab("Months from Dec. 2001")
 
 #ACF and PACF Plots
 par(mfrow=c(1,2))
 Acf(tseries_90min_Mon_df$Overall,lag.max=30) #Up to lag 19 looks significant
 Pacf(tseries_90min_Mon_df$Overall,lag.max=30) #Up to lag 19 looks significant
+
+par(mfrow=c(1,1))
 ```
 
 
@@ -143,10 +146,10 @@ points(1:length(IPA90min_Mon_filtered$Overall),fitted(MA_1_13),type="l",col="blu
 tsdisplay(residuals(MA_1_13),lag.max=110,main="MA(1,13) Resid. Diagnostics")
 
 AR_2_13 = arima(IPA90min_Mon_filtered$Overall, order=c(13,0,0),fixed=c(NA,NA,0,0,0,0,0,0,0,0,0,0,NA,NA))
-summary(AR_1_2_13)
-plot(forecast(AR_1_2_13,h=50))
-points(1:length(IPA90min_Mon_filtered$Overall),fitted(AR_1_2_13),type="l",col="blue")
-tsdisplay(residuals(AR_1_2_13),lag.max=110,main="MA(1,13) Resid. Diagnostics")
+summary(AR_2_13)
+plot(forecast(AR_2_13,h=50))
+points(1:length(IPA90min_Mon_filtered$Overall),fitted(AR_2_13),type="l",col="blue")
+tsdisplay(residuals(AR_2_13),lag.max=110,main="MA(1,13) Resid. Diagnostics")
 
 #Model with best AIC and RMSE
 AR_1_MA_2_13 = arima(IPA90min_Mon_filtered$Overall, order=c(13,0,13),fixed=c(NA,0,0,0,0,0,0,0,0,0,0,0,0,NA,NA,0,0,0,0,0,0,0,0,0,0,NA,NA))
@@ -160,7 +163,7 @@ tsdisplay(residuals(AR_1_MA_2_13),lag.max=110,main="AR(1)MA(2,13) Resid. Diagnos
 
 These models don't capture the significant lag 13 residuals and may be overfitting the data.
 
-``` {r}
+```{r}
 
 #Differencing degree of 1 (d=1)
 #Stationary model per the forecast plot
